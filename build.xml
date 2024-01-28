@@ -1,0 +1,480 @@
+<!--
+    TODO:
+    - ”ant all” should be ”ant full”.
+    - (new) ant all should build everything, only if it has not been built before.
+    - Tasks like ”ant library” should be meta tasks that pulls everything it needs,
+    and something like ant library-task should pull only stuff related to library.
+    Both should be documented.
+    - There should be direct way to export output of task to pastebin,
+    for example something like ant nc generator which sends the output to pastebin
+    and returns a link.
+    - Instead of version.properties there should be generic way to provide (default)
+    properties to Jambi, for example in form of file, or better, in qtjambi-deploy.
+    This can include stuff like debug flag and version.
+-->
+
+<project default="help" basedir="." name="qtjambi.main">
+
+    <property file="build.properties"/>
+    <property name="build.properties.loaded" value="true"/>
+
+    <!--
+        Import files containing tasks for the compilation.
+    -->
+
+    <import file="antfiles/generator.xml"/>
+    <import file="antfiles/native.xml"/>
+    <import file="antfiles/java.xml"/>
+    <import file="antfiles/clean.xml"/>
+    <import file="antfiles/autotests.xml" />
+
+    <!-- These properties used to be at the top of build.properties
+         but no one is expected to change them.
+         -->
+    <property name="resourcesdir"                   location="resources"/>
+    <property name="java.srcdir"                   location="src/java"/>
+    <property name="native.srcdir"                   location="src/cpp"/>
+    <!--
+        Initialization tasks. Note that the init.taskdef task depends on a jar
+        task, since ant-qtjambi.jar must be set in order for the
+        <qtjambi-initialize> task to be set at all.
+    -->
+
+    <target name="log">
+        <tstamp>
+            <format property="timestamp" pattern="yyyy-MM-dd_HH-mm-ss"/>
+        </tstamp>
+        <property name="build.log.dir" location="${basedir}/buildlogs"/>
+        <mkdir dir="${build.log.dir}"/>
+        <property name="build.log.filename" value="build_${timestamp}.log"/>
+        <property name="build.log.loglevel" value="info" />
+        <record name="${build.log.dir}/${build.log.filename}" loglevel="${build.log.loglevel}" append="false"/>
+        <echo message="Build logged to ${build.log.filename}"/>
+    </target>
+
+    <target name="init.taskdef" depends="log">
+        <mkdir dir="${resourcesdir}/ant"/>
+        <javac debug="true" deprecation="true" source="1.8" target="1.8"
+                memorymaximumsize="1024m" verbose="false"
+                includeantruntime="true"
+                destdir="${resourcesdir}/ant">
+            <compilerarg value="-Xlint:deprecation" />
+            <compilerarg value="-Xlint:unchecked" />
+            <compilerarg value="-Xlint:-module,-options" />
+            <src path="${java.srcdir}/ant"/>
+        </javac>
+        <copy todir="${resourcesdir}/ant" includeemptydirs="false">
+            <fileset dir="${java.srcdir}/ant">
+                <include name="**/*"/>
+                <exclude name="**/.*"/>
+                <exclude name="**/*.java"/>
+            </fileset>
+        </copy>
+        <taskdef resource="io/qt/tools/ant/ant-qtjambi.xml">
+            <classpath>
+                <pathelement path="${resourcesdir}/ant"/>
+            </classpath>
+        </taskdef>
+    </target>
+
+    <target name="init" depends="log, init.taskdef">
+        <qtjambi-initialize verbose="true"/>
+    </target>
+
+    <target name="init.build">
+        <qtjambi-initialize-build verbose="true"/>
+		<if>
+			<and>
+				<or>
+					<equals arg1="${qtjambi.osname}" arg2="android"/>
+					<equals arg1="${qtjambi.osname}" arg2="android-x86"/>
+					<equals arg1="${qtjambi.osname}" arg2="android-x64"/>
+					<equals arg1="${qtjambi.osname}" arg2="android-arm"/>
+					<equals arg1="${qtjambi.osname}" arg2="android-arm64"/>
+				</or>
+				<not>
+					<and>
+						<isset property="qtjambi.android.ndk"/>
+						<available file="${qtjambi.android.ndk}" type="dir"/>
+					</and>
+				</not>
+			</and>
+			<then>
+				<if>
+					<os family="windows"/>
+					<then>
+						<if>
+							<not>
+								<available file="${resourcesdir}/android/windows/android-ndk-${android.ndk.version}" type="dir"/>
+							</not>
+							<then>
+								<mkdir dir="${resourcesdir}/android"/>
+								<mkdir dir="${resourcesdir}/android/windows"/>
+								<get src="${android.repository}/android-ndk-${android.ndk.version}-windows.zip" dest="${resourcesdir}/android/android-ndk-${android.ndk.version}-windows.zip" verbose="true"/>
+								<unzip src="${resourcesdir}/android/android-ndk-${android.ndk.version}-windows.zip" dest="${resourcesdir}/android/windows"/>
+								<delete file="${resourcesdir}/android/android-ndk-${android.ndk.version}-windows.zip"/>
+							</then>
+						</if>
+						<property name="qtjambi.android.ndk" location="${resourcesdir}/android/windows/android-ndk-${android.ndk.version}"/>
+					</then>
+				</if>
+				<if>
+					<and>
+						<os family="unix"/>
+					</and>
+					<then>
+						<if>
+							<os family="mac"/>
+							<then>
+								<if>
+									<not>
+										<available file="${resourcesdir}/android/mac/android-ndk-${android.ndk.version}" type="dir"/>
+									</not>
+									<then>
+										<mkdir dir="${resourcesdir}/android"/>
+										<mkdir dir="${resourcesdir}/android/mac"/>
+										<get src="${android.repository}/android-ndk-${android.ndk.version}-darwin.dmg" dest="${resourcesdir}/android/android-ndk-${android.ndk.version}-darwin.dmg" verbose="true"/>
+										<exec executable="hdiutil">
+											<arg value="attach"/>
+											<arg value="-mountpoint"/>
+											<arg value="${resourcesdir}/android/mac/Android NDK ${android.ndk.version}"/>
+											<arg value="${resourcesdir}/android/android-ndk-${android.ndk.version}-darwin.dmg"/>
+										</exec>
+										<mkdir dir="${resourcesdir}/android/mac/android-ndk-${android.ndk.version}"/>
+										<path id="AndroidNDKdirset">
+											<dirset dir="${resourcesdir}/android/mac/Android NDK ${android.ndk.version}">
+												<include name="AndroidNDK*.app"/>
+											</dirset>
+										</path>
+										<pathconvert pathsep=","
+											property="AndroidNDKapp">
+											<path refid="AndroidNDKdirset"/>
+										</pathconvert>
+										<mkdir dir="${resourcesdir}/android/mac/android-ndk-${android.ndk.version}"/>
+										<copy todir="${resourcesdir}/android/mac/android-ndk-${android.ndk.version}">
+										  <fileset dir="${AndroidNDKapp}/Contents/NDK">
+											<include name="**"/>
+										  </fileset>
+										</copy>
+										<exec executable="hdiutil">
+											<arg value="detach"/>
+											<arg value="${resourcesdir}/android/mac/Android NDK ${android.ndk.version}"/>
+										</exec>
+										<delete file="${resourcesdir}/android/android-ndk-${android.ndk.version}-darwin.dmg"/>
+									</then>
+								</if>
+								<property name="qtjambi.android.ndk" location="${resourcesdir}/android/mac/android-ndk-${android.ndk.version}"/>
+							</then>
+							<else>
+								<if>
+									<not>
+										<available file="${resourcesdir}/android/linux/android-ndk-${android.ndk.version}" type="dir"/>
+									</not>
+									<then>
+										<mkdir dir="${resourcesdir}/android"/>
+										<mkdir dir="${resourcesdir}/android/linux"/>
+										<get src="${android.repository}/android-ndk-${android.ndk.version}-linux.zip" dest="${resourcesdir}/android/android-ndk-${android.ndk.version}-linux.zip" verbose="true"/>
+										<unzip src="${resourcesdir}/android/android-ndk-${android.ndk.version}-linux.zip" dest="${resourcesdir}/android/linux"/>
+										<delete file="${resourcesdir}/android/android-ndk-${android.ndk.version}-linux.zip"/>
+									</then>
+								</if>
+								<property name="qtjambi.android.ndk" location="${resourcesdir}/android/linux/android-ndk-${android.ndk.version}"/>
+							</else>
+						</if>
+					</then>
+				</if>
+			</then>
+		</if>
+    </target>
+
+    <!--
+        END of initilization tasks
+    -->
+
+    <!--
+        Tools building
+    -->
+
+    <macrodef name="uic">
+        <attribute name="uifile"/>
+        <attribute name="targetpackage"/>
+        <attribute name="targetdirectory"/>
+        <attribute name="libfiles"/>
+        <attribute name="connections"/>
+        <sequential>
+            <if>
+                <os family="mac"/>
+                <then>
+                    <property name="XstartOnFirstThread" value="-XstartOnFirstThread" />
+                </then>
+                <else>
+                    <property name="XstartOnFirstThread" value="-Dx" />
+                </else>
+            </if>
+            <pathconvert property="librarypath">
+                <path>
+                    <pathelement location="${tools.qt.bindir}"/>
+                    <pathelement location="${tools.qt.libdir}"/>
+                </path>
+            </pathconvert>
+            <pathconvert property="classpath">
+                <path>
+                    <pathelement location="${tools.qt.bindir}"/>
+                    <pathelement location="${tools.qt.libdir}"/>
+                </path>
+            </pathconvert>
+			<trycatch>
+				<try>
+					<java fork="true" classname="io.qt.uic.Main" failonerror="true">
+						<jvmarg value="-Djava.library.path=${librarypath}"/>
+						<jvmarg value="-Dio.qt.deploymentdir=${outputDir}/tmp"/>
+						<jvmarg value="-Dio.qt.verbose-loading=true"/>
+						<jvmarg value="${XstartOnFirstThread}"/>
+						<arg value="-f" />
+						<arg value="-o" />
+						<arg value="@{targetdirectory}" />
+						<arg value="-p" />
+						<arg value="@{targetpackage}" />
+						<arg value="-c" />
+						<arg value="@{connections}" />
+						<arg value="@{uifile}" />
+						<env key="DYLD_LIBRARY_PATH" value="${librarypath}" />
+						<classpath>
+							<fileset dir="${deploymentdir}" includes="qtjambi-${qtjambi.jar.version}.jar,qtjambi-uic-${qtjambi.jar.version}.jar,@{libfiles}"/>
+						</classpath>
+					</java>
+				</try>
+				<finally>
+					<delete dir="${outputDir}/tmp"/>
+				</finally>
+			</trycatch>
+        </sequential>
+    </macrodef>
+
+    <target name="finished">
+        <echo>QtJambi ${qtjambi.jar.version}</echo>
+    </target>
+    <target name="help" description="log, Provides detailed help.">
+        <echo>
+Welcome to Qt Jambi help task.
+
+Quick howto:
+
+[edit build.properties to suit your system]
+set QTDIR to directory containing Qt either as environment variable or in build.properties.
+
+ant all
+
+Further options:
+        </echo>
+        <java classname="org.apache.tools.ant.Main" classpath="${java.class.path}" fork="true">
+            <arg value="-projecthelp" />
+            <arg value="-buildfile" />
+            <arg value="${ant.file}" />
+        </java>
+    </target>
+
+    <!--
+        Root targets
+
+        Specifies the top targets, which does not actually do anything, but
+        provides consistent and easy to use interface for humans to use.
+    -->
+    
+    <target name="targetproxy">
+        <antcall inheritAll="false" target="${proxy.target}"/>
+    </target>
+
+    <target name="javadocs" depends="log, init.taskdef" description="Generates the Java Doc pages for QtJambi">
+        <foreach-version targets="javadocs-impl"/>
+    </target>
+    
+    <target name="single.javadocs" depends="log, init.taskdef" description="Generates the Java Doc pages for QtJambi">
+        <foreach-version targets="single.javadocs-impl"/>
+    </target>
+    
+    <target name="generator.make" depends="log, init.taskdef"
+        description="Compiles the generator.">
+        <foreach-version targets="generator.make-impl"/>
+    </target>
+    <target name="generator.make-impl" depends="init.build, tools.generator.make">
+        <antcall target="finished"/>
+    </target>
+
+    <target name="generate" depends="log, init.taskdef"
+        description="Compiles and runs the Qt Jambi Generator.">
+        <foreach-version targets="generate-impl"/>
+    </target>
+    <target name="generate-impl" depends="tools.generator.make, tools.generator.run"/>
+
+    <target name="generator.run" depends="log, init.taskdef"
+        description="Runs the Qt Jambi generator on the Qt headers">
+        <foreach-version targets="generator.run-impl"/>
+    </target>
+    <target name="generator.run-impl" depends="init.build, tools.generator.run">
+        <antcall target="finished"/>
+    </target>
+
+    <target name="library.native" depends="log, init.taskdef"
+        description="Compiles and bundles the Qt Jambi native libraries.">
+        <foreach-version targets="library.native-impl"/>
+    </target>
+    <target name="library.native-impl" depends="library.native.qmake-impl, library.native.make-impl, library.native.bundle-impl"/>
+    
+    <target name="library.native.qmake" depends="log, init.taskdef" description="Runs qmake on the Qt Jambi native library">
+        <foreach-version targets="library.native.qmake-impl"/>
+    </target>
+    
+    <target name="library.native.make" depends="log, init.taskdef" description="Runs make on the Qt Jambi native library">
+        <foreach-version targets="library.native.make-impl"/>
+    </target>
+    
+    <target name="library.native.compile" depends="log, init.taskdef">
+        <foreach-version targets="library.native.compile-impl"/>
+    </target>
+	
+    <target name="library.native.makebundle" depends="log, init.taskdef">
+        <foreach-version targets="library.native.makebundle-impl"/>
+    </target>
+    
+    <target name="library.native.bundle" depends="log, init.taskdef">
+        <foreach-version targets="library.native.bundle-impl"/>
+    </target>
+
+    <target name="library.native.bundle.plugins" depends="log, init.taskdef">
+        <foreach-version targets="library.native.bundle.plugins-impl"/>
+    </target>
+	
+    <target name="bundle.qtlib" depends="log, init.taskdef">
+        <foreach-version targets="bundle.qtlib-impl"/>
+    </target>
+
+    <target name="library.java" depends="log, init.taskdef"
+        description="Compiles and bundles the Qt Jambi java libraries.">
+        <foreach-version targets="library.java-impl"/>
+    </target>
+    <target name="library.java-impl" depends="init.build, javac.excludes, java.build.qtjambi"/>
+
+    <target name="plugins.java" depends="log, init.taskdef"
+        description="Compiles the Qt Jambi plugins.">
+        <foreach-version targets="plugins.java-impl"/>
+    </target>
+    <target name="plugins.java-impl" depends="init.build, javac.excludes, java.build.qtjambiplugins"/>
+    
+    <target name="plugins" depends="log, init.taskdef"
+        description="Compiles and bundles the Qt Jambi plugins.">
+        <foreach-version targets="plugins-impl"/>
+    </target>
+    <target name="plugins-impl" depends="init.build, javac.excludes, java.build.qtjambiplugins, library.native.bundle.plugins-impl"/>
+
+    <target name="library" depends="log, init.taskdef"
+        description="Compiles and bundles the Qt Jambi libraries.">
+        <foreach-version targets="library-impl"/>
+    </target>
+    <target name="library-impl" depends="library.native.qmake-impl, library.native.make-impl, library.java-impl, library.native.bundle-impl"/>
+
+    <target name="all" depends="log, init.taskdef"
+        description="Generates, builds and bundles the Qt Jambi libraries.">
+        <foreach-version targets="all-impl"/>
+    </target>
+    <target name="all-impl" depends="generate-impl, library-impl"/>
+    
+    <target name="clean" depends="log, init.taskdef"
+        description="Cleans everything">
+        <foreach-version targets="clean-impl"/>
+    </target>
+    
+    <target name="tests.clean" depends="log, init.taskdef"
+        description="Cleans built test files">
+        <foreach-version targets="tests.clean-impl"/>
+    </target>
+
+    <target name="tests.generate" depends="log, init.taskdef"
+         description="Generates and builds all tests">
+        <foreach-version targets="tests.generate-impl"/>
+    </target>
+
+    <target name="tests.compile" depends="log, init.taskdef"
+          description="Builds all tests without recalling generator">
+        <foreach-version targets="tests.compile-impl"/>
+    </target>
+
+    <target name="tests.compile.native" depends="log, init.taskdef"
+          description="Builds native test components">
+        <foreach-version targets="tests.compile.native-impl"/>
+    </target>
+
+    <target name="tests.compile.java" depends="log, init.taskdef"
+          description="Builds java test components">
+        <foreach-version targets="tests.compile.java-impl"/>
+    </target>
+
+    <target name="tests.compile.plugins" depends="log, init.taskdef"
+          description="Builds plugins test components">
+        <foreach-version targets="tests.compile.plugins-impl"/>
+    </target>
+
+    <target name="tests.run" depends="log, init.taskdef"
+           description="Runs tests and generates report in TestReport subdir">
+        <foreach-version targets="tests.run-impl"/>
+    </target>
+	
+    <target name="tests.run.all" depends="log, init.taskdef"
+            description="Runs tests and generates report in TestReport subdir">
+        <foreach-version targets="tests.run.all-impl"/>
+    </target>
+
+    <target name="tests.release.run" depends="log, init.taskdef"
+            description="Runs tests and generates report in TestReport subdir">
+        <foreach-version targets="tests.release.run-impl"/>
+    </target>
+
+    <target name="tests.debug.run" depends="log, init.taskdef"
+            description="Runs tests and generates report in TestReport subdir">
+        <foreach-version targets="tests.debug.run-impl"/>
+    </target>
+
+    <target name="tests.release.run8" depends="log, init.taskdef"
+            description="Runs tests and generates report in TestReport subdir">
+        <foreach-version targets="tests.release.run8-impl"/>
+    </target>
+
+    <target name="tests.debug.run8" depends="log, init.taskdef"
+            description="Runs tests and generates report in TestReport subdir">
+        <foreach-version targets="tests.debug.run8-impl"/>
+    </target>
+    
+    <target name="tests.release.run.all" depends="log, init.taskdef"
+            description="Runs tests and generates report in TestReport subdir">
+        <foreach-version targets="tests.release.run.all-impl"/>
+    </target>
+    
+    <target name="tests.debug.run.all" depends="log, init.taskdef"
+            description="Runs tests and generates report in TestReport subdir">
+        <foreach-version targets="tests.debug.run.all-impl"/>
+    </target>
+
+    <target name="deploy.snapshot" depends="log, init.taskdef"
+        description="Publishes QtJambi as Maven artifact snapshot.">
+        <foreach-version targets="init.build,deploy-snapshot"/>
+    </target>
+        
+    <target name="deploy.release" depends="log, init.taskdef"
+        description="Publishes QtJambi as Maven artifact.">
+        <foreach-version targets="init.build,deploy-release"/>
+    </target>
+        
+    <target name="deploy.bundle" depends="log, init.taskdef"
+        description="Publishes QtJambi as Maven artifact.">
+        <foreach-version targets="init.build,deploy-bundle"/>
+    </target>
+    
+    <target name="deploy.bundle.release" depends="log, init.taskdef"
+        description="Publishes QtJambi as Maven artifact.">
+        <foreach-version targets="init.build,deploy-release,deploy-bundle"/>
+    </target>
+    <target name="test" depends="log, init.taskdef"
+        description="Publishes QtJambi as Maven artifact.">
+        <foreach-version targets="init.build,finished"/>
+    </target>
+</project>
